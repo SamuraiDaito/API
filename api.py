@@ -9,7 +9,7 @@ db_config = {
     'dbname': 'concourse',
     'user': 'concourse_user',
     'password': 'concourse_pass',
-    'host': 'localhost',
+    'host': '192.168.3.109',
     'port': 5432
 }
 
