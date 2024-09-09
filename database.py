@@ -55,7 +55,7 @@ try:
     #     conn.commit()
 
     # Append the new data after deleting existing rows
-    df.to_sql('profit_loss_oil_gas', engine, if_exists='append', index=False)
+    df.to_sql('oil_gas_pl', engine, if_exists='append', index=False)
 
     print("Data inserted successfully into PostgreSQL!")
 except Exception as e:
