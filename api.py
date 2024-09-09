@@ -1,6 +1,5 @@
-import requests
+import yfinance as yf
 import pandas as pd
-from datetime import datetime, timedelta
 import psycopg2
 from psycopg2 import sql
 
@@ -13,107 +12,114 @@ db_config = {
     'port': 5432
 }
 
-# List of companies and their symbols for eodhd.com API (NSE)
+# List of stock symbols
 companies = {
-    'RELIANCE': 'RELIANCE.NSE',
-    'ONGC': 'ONGC.NSE',
-    'IOC': 'IOC.NSE',
-    'BPCL': 'BPCL.NSE',
-    'HINDPETRO': 'HINDPETRO.NSE',
-    'GAIL': 'GAIL.NSE',
-    'MGL': 'MGL.NSE',
-    'IGL': 'IGL.NSE',
-    'OIL': 'OIL.NSE',
-    'PETRONET': 'PETRONET.NSE'
+    'Reliance': 'RELIANCE.NS',
+    'ONGC': 'ONGC.NS',
+    'IOC': 'IOC.NS',
+    'BPCL': 'BPCL.NS',
+    'HINDPETRO': 'HINDPETRO.NS',
+    'GAIL': 'GAIL.NS',
+    'MGL': 'MGL.NS',
+    'IGL': 'IGL.NS',
+    'OIL': 'OIL.NS',
+    'PETRONET': 'PETRONET.NS'
 }
 
-# API token
-api_token = '66da7442a643d7.31571270'
+def fetch_and_process_data(stock_symbol, company_name):
+    # Download historical data
+    stock_data = yf.download(stock_symbol, start="2012-04-01", end="2024-03-31", interval='1d')
 
-# Date range
-end_date = datetime.now().strftime('%Y-%m-%d')
-start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+    # Convert index to column
+    stock_data.reset_index(inplace=True)
 
-# Prepare a list to collect data
-all_data = []
+    # Calculate yearly statistics
+    stock_data['Year'] = stock_data['Date'].dt.year
+    yearly_data = stock_data.groupby('Year').agg({
+        'Open': 'mean',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'mean',
+        'Volume': 'mean'
+    }).reset_index()
 
-# Function to fetch data from eodhd.com API
-def fetch_data(symbol):
-    url = f'https://eodhd.com/api/eod/{symbol}?from={start_date}&to={end_date}&api_token={api_token}&fmt=json'
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        return data
-    else:
-        print(f"Failed to fetch data for {symbol}")
-        return None
-
-# Fetch and store data for each company
-for company, symbol in companies.items():
-    data = fetch_data(symbol)
+    # Rename columns to match the requested output
+    yearly_data.rename(columns={
+        'Open': 'Average_Open',
+        'High': 'Max_High',
+        'Low': 'Min_Low',
+        'Close': 'Average_Close',
+        'Volume': 'Average_Volume'
+    }, inplace=True)
     
-    if data:
-        for entry in data:
-            all_data.append({
-                'Company': company,
-                'Date': entry.get('date'),
-                'Open': entry.get('open', None),
-                'High': entry.get('high', None),
-                'Low': entry.get('low', None),
-                'Close': entry.get('close', None),
-                'Volume': entry.get('volume', None)
-            })
+    # Add company name column
+    yearly_data['Company'] = company_name
 
-# Connect to PostgreSQL and insert data
-try:
-    # Connect to the database
-    conn = psycopg2.connect(**db_config)
-    cursor = conn.cursor()
+    # Round data to 2 decimal places
+    yearly_data = yearly_data.round(2)
 
-    # Create table if not exists
-    create_table_query = '''
-    CREATE TABLE IF NOT EXISTS api_data (
-        Company VARCHAR(50),
-        Date DATE,
-        Open FLOAT,
-        High FLOAT,
-        Low FLOAT,
-        Close FLOAT,
-        Volume BIGINT
-    );
-    '''
-    cursor.execute(create_table_query)
-    conn.commit()
+    return yearly_data
 
-    # Insert data into the table
-    insert_query = '''
-    INSERT INTO api_data (Company, Date, Open, High, Low, Close, Volume)
-    VALUES (%s, %s, %s, %s, %s, %s, %s);
-    '''
+def insert_data_into_db(data):
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(**db_config)
+        cursor = conn.cursor()
 
-    # Insert each row of data
-    for record in all_data:
-        cursor.execute(insert_query, (
-            record['Company'],
-            record['Date'],
-            record['Open'],
-            record['High'],
-            record['Low'],
-            record['Close'],
-            record['Volume']
-        ))
+        # Create table if not exists
+        create_table_query = '''
+        CREATE TABLE IF NOT EXISTS api_ohlc_data (
+            Company VARCHAR(50),
+            Year INT,
+            Average_Open FLOAT,
+            Max_High FLOAT,
+            Min_Low FLOAT,
+            Average_Close FLOAT,
+            Average_Volume FLOAT
+        );
+        '''
+        cursor.execute(create_table_query)
+        conn.commit()
 
-    # Commit the transaction
-    conn.commit()
+        # Insert data into the table
+        insert_query = '''
+        INSERT INTO api_ohlc_data (Company, Year, Average_Open, Max_High, Min_Low, Average_Close, Average_Volume)
+        VALUES (%s, %s, %s, %s, %s, %s, %s);
+        '''
 
-    print("Data has been successfully inserted into the 'api_data' table.")
+        # Insert each row of data
+        for _, row in data.iterrows():
+            cursor.execute(insert_query, (
+                row['Company'],
+                row['Year'],
+                row['Average_Open'],
+                row['Max_High'],
+                row['Min_Low'],
+                row['Average_Close'],
+                row['Average_Volume']
+            ))
 
-except Exception as e:
-    print(f"Error occurred: {e}")
+        # Commit the transaction
+        conn.commit()
 
-finally:
-    # Close the cursor and connection
-    if cursor:
-        cursor.close()
-    if conn:
-        conn.close()
+        print("Data has been successfully inserted into the 'api_ohlc_data' table.")
+
+    except Exception as e:
+        print(f"Error occurred: {e}")
+
+    finally:
+        # Close the cursor and connection
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# Process data for all companies
+all_data = pd.DataFrame()
+
+for company_name, symbol in companies.items():
+    company_data = fetch_and_process_data(symbol, company_name)
+    all_data = pd.concat([all_data, company_data], ignore_index=True)
+
+# Insert data into PostgreSQL
+insert_data_into_db(all_data)
